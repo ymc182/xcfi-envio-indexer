@@ -10,7 +10,13 @@
 const GOLDSKY_URL =
   "https://api.goldsky.com/api/public/project_cm651vt5aie7401z4ew271x8c/subgraphs/xcfi-vault/1.0.0/gn";
 const ENVIO_URL = process.env.ENVIO_URL ?? "http://localhost:8080/v1/graphql";
-const ENVIO_ADMIN_SECRET = process.env.ENVIO_ADMIN_SECRET ?? "testing";
+const ENVIO_ADMIN_SECRET = process.env.ENVIO_ADMIN_SECRET;
+const isLocalEnvio = ENVIO_URL.includes("localhost") || ENVIO_URL.includes("127.0.0.1");
+const envioHeaders: Record<string, string> = isLocalEnvio
+  ? { "x-hasura-admin-secret": ENVIO_ADMIN_SECRET ?? "testing" }
+  : ENVIO_ADMIN_SECRET
+    ? { "x-hasura-admin-secret": ENVIO_ADMIN_SECRET }
+    : {};
 
 type Totals = { deposited: bigint; withdrawn: bigint };
 
@@ -42,21 +48,13 @@ async function getGoldskyHead(): Promise<number> {
 }
 
 async function getEnvioHead(): Promise<number> {
-  const data = await gql<{
-    XToken_Deposit_aggregate: { aggregate: { max: { blockNumber: string | null } } };
-    XToken_Withdraw_aggregate: { aggregate: { max: { blockNumber: string | null } } };
-  }>(
+  const data = await gql<{ chain_metadata: { latest_processed_block: number }[] }>(
     ENVIO_URL,
-    `{
-      XToken_Deposit_aggregate { aggregate { max { blockNumber } } }
-      XToken_Withdraw_aggregate { aggregate { max { blockNumber } } }
-    }`,
+    "{ chain_metadata { latest_processed_block } }",
     {},
-    { "x-hasura-admin-secret": ENVIO_ADMIN_SECRET },
+    envioHeaders,
   );
-  const d = Number(data.XToken_Deposit_aggregate.aggregate.max.blockNumber ?? 0);
-  const w = Number(data.XToken_Withdraw_aggregate.aggregate.max.blockNumber ?? 0);
-  return Math.max(d, w);
+  return data.chain_metadata[0]?.latest_processed_block ?? 0;
 }
 
 async function fetchAllOwnersFromGoldsky(): Promise<string[]> {
@@ -125,27 +123,49 @@ async function fetchGoldskyTotals(owner: string): Promise<Totals> {
   return { deposited, withdrawn };
 }
 
+async function paginateEnvio(
+  entity: "XToken_Deposit" | "XToken_Withdraw",
+  owner: string,
+  headBound: number,
+): Promise<bigint> {
+  const pageSize = 1000;
+  let lastBlock = 0;
+  let total = 0n;
+  while (true) {
+    const data = await gql<Record<string, { assets: string; blockNumber: string }[]>>(
+      ENVIO_URL,
+      `query($user: String!, $head: numeric!, $lastBlock: numeric!) {
+        ${entity}(
+          where: {
+            owner: { _eq: $user }
+            blockNumber: { _lte: $head, _gte: $lastBlock }
+          }
+          order_by: { blockNumber: asc }
+          limit: ${pageSize}
+        ) { assets blockNumber }
+      }`,
+      {
+        user: owner.toLowerCase(),
+        head: headBound.toString(),
+        lastBlock: lastBlock.toString(),
+      },
+      envioHeaders,
+    );
+    const rows = data[entity] ?? [];
+    if (rows.length === 0) break;
+    for (const r of rows) total += BigInt(r.assets);
+    if (rows.length < pageSize) break;
+    lastBlock = Number(rows[rows.length - 1].blockNumber) + 1;
+  }
+  return total;
+}
+
 async function fetchEnvioTotals(owner: string, headBound: number): Promise<Totals> {
-  const data = await gql<{
-    XToken_Deposit_aggregate: { aggregate: { sum: { assets: string | null } } };
-    XToken_Withdraw_aggregate: { aggregate: { sum: { assets: string | null } } };
-  }>(
-    ENVIO_URL,
-    `query($user: String!, $head: numeric!) {
-      XToken_Deposit_aggregate(
-        where: { owner: { _eq: $user }, blockNumber: { _lte: $head } }
-      ) { aggregate { sum { assets } } }
-      XToken_Withdraw_aggregate(
-        where: { owner: { _eq: $user }, blockNumber: { _lte: $head } }
-      ) { aggregate { sum { assets } } }
-    }`,
-    { user: owner.toLowerCase(), head: headBound.toString() },
-    { "x-hasura-admin-secret": ENVIO_ADMIN_SECRET },
-  );
-  return {
-    deposited: BigInt(data.XToken_Deposit_aggregate.aggregate.sum.assets ?? "0"),
-    withdrawn: BigInt(data.XToken_Withdraw_aggregate.aggregate.sum.assets ?? "0"),
-  };
+  const [deposited, withdrawn] = await Promise.all([
+    paginateEnvio("XToken_Deposit", owner, headBound),
+    paginateEnvio("XToken_Withdraw", owner, headBound),
+  ]);
+  return { deposited, withdrawn };
 }
 
 async function main() {

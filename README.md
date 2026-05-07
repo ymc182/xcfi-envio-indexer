@@ -82,8 +82,37 @@ query VaultEarnings($user: String!) {
 
 Response shape: `data.XToken_Deposit` / `data.XToken_Withdraw`.
 
+## Hosted endpoint
+
+Production deployment as of 2026-05-07:
+`https://indexer.dev.hyperindex.xyz/2df8979/v1/graphql`
+
+The hosted Hasura instance does NOT expose `*_aggregate` query fields — only
+direct entity queries. The parity script paginates by `blockNumber` to handle
+this and to handle the airdrop wallet (>1000 events).
+
 ## Rollback
 
-If the Envio endpoint misbehaves, revert the URL in `investor-frontend` to
-the Goldsky endpoint. Note Goldsky stopped indexing at block 43634240 — the
-fallback shows stale numbers.
+If the Envio endpoint misbehaves, two-step rollback:
+
+1. Replace `vaultSubgraphUrl` in [`investor-frontend/src/config.ts`](../investor-frontend/src/config.ts)
+   with the Goldsky URL:
+   ```
+   https://api.goldsky.com/api/public/project_cm651vt5aie7401z4ew271x8c/subgraphs/xcfi-vault/1.0.0/gn
+   ```
+2. Revert the GraphQL query shape in [`investor-frontend/src/App.tsx`](../investor-frontend/src/App.tsx):
+   - `XToken_Deposit(where: { owner: { _eq: $user } }, limit: 1000)` → `deposits(where: { owner: $user }, first: 1000)`
+   - Same for Withdraw → `withdraws`
+   - `data.XToken_Deposit` / `data.XToken_Withdraw` → `data.deposits` / `data.withdraws`
+
+**Caveat:** Goldsky stopped indexing at block 43634240 (~2026-04-09). Any
+deposit or withdraw after that is invisible to the rollback path, so user
+gain calculations will undercount recent activity.
+
+## Re-running the parity check against the hosted endpoint
+
+```bash
+ENVIO_URL=https://indexer.dev.hyperindex.xyz/2df8979/v1/graphql pnpm parity
+```
+
+Last verified: 22/22 owners match Goldsky for blocks ≤ 43634240.
