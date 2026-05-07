@@ -1,0 +1,15 @@
+# yaml-language-server: $schema=./node_modules/envio/evm.schema.json
+name: xcfi-vault
+networks:
+  - id: 8453
+    start_block: 38877193
+    contracts:
+      - name: XToken
+        address:
+          - 0x77652b905F46aC36d11309b71E2257958Cab777d
+        handler: src/EventHandlers.ts
+        events:
+          - event: Deposit(address indexed sender, address indexed owner, uint256 assets, uint256 shares)
+          - event: Withdraw(address indexed sender, address indexed receiver, address indexed owner, uint256 assets, uint256 shares)
+unordered_multichain_mode: true
+preload_handlers: true

@@ -1,0 +1,18 @@
+type XToken_Deposit {
+  id: ID!
+  sender: String!
+  owner: String!
+  assets: BigInt!
+  shares: BigInt!
+  blockNumber: BigInt!
+}
+
+type XToken_Withdraw {
+  id: ID!
+  sender: String!
+  receiver: String!
+  owner: String!
+  assets: BigInt!
+  shares: BigInt!
+  blockNumber: BigInt!
+}
